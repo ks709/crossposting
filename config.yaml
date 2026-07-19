@@ -1,0 +1,30 @@
+# Instagram Reels -> YouTube crossposter configuration.
+
+# In "new" mode, only reels posted on/after this date are crossposted.
+# Reels older than this are handled gradually by "backlog" mode.
+# Set this to roughly the day you turn the automation on (UTC).
+start_date: "2026-07-18"
+
+youtube:
+  # public | unlisted | private
+  # NOTE: until your Google Cloud project passes the YouTube API compliance
+  # audit, uploads are FORCED to private no matter what you set here. After
+  # the audit is approved, "public" takes effect.
+  privacy_status: "public"
+  category_id: "22"        # 22 = People & Blogs
+  made_for_kids: false
+
+backlog:
+  per_run: 1               # how many old reels to post per backlog run
+  max_uploads_per_day: 6   # hard safety cap across new+backlog (YouTube quota)
+
+instagram:
+  # Only these product types are eligible. Trial reels are not on your public
+  # profile, so the API does not return them until you share them publicly.
+  include_product_types: ["REELS"]
+  # IG media IDs to never crosspost (belt-and-suspenders safety net).
+  exclude_media_ids: []
+
+title:
+  max_length: 100
+  empty_fallback: "Reel"   # used with the date when a reel has no caption

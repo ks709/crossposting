@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.env
+client_secret*.json
+*.mp4
+.venv/
+venv/
+.DS_Store
