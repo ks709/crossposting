@@ -4,6 +4,9 @@ Automatically reposts your Instagram reels to YouTube (as Shorts) with the same
 caption, and slowly drips your **older** reels to YouTube a few per day. Runs
 free on GitHub Actions — no PC needs to stay on.
 
+> This tool uploads videos to **YouTube** using the **YouTube Data API v3**.
+> **[Privacy Policy](PRIVACY.md)** · **[Terms of Service](TERMS.md)**
+
 - **New reels** are checked every 2 hours and posted to YouTube.
 - **Older reels** are posted oldest-first, ~3 per day, until the backlog is clear.
 - Only **public** reels are crossposted. Trial reels aren't on your public
