@@ -14,6 +14,11 @@ youtube:
   category_id: "22"        # 22 = People & Blogs
   made_for_kids: false
 
+# Minimum hours between ANY two uploads (applies across both "new" and
+# "backlog" modes). A run that would break this spacing does nothing and exits.
+# While this is set, each run uploads at most one video. Set to 0 to disable.
+min_gap_hours: 2
+
 backlog:
   per_run: 1               # how many old reels to post per backlog run
   max_uploads_per_day: 6   # hard safety cap across new+backlog (YouTube quota)

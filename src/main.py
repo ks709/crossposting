@@ -12,7 +12,7 @@ import logging
 import os
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from . import captions, instagram, youtube
 from . import state as state_mod
@@ -46,6 +46,20 @@ def _parse_ig_timestamp(ts: str | None) -> datetime | None:
         return None
 
 
+def _last_posted_at(state: dict) -> datetime | None:
+    """Timestamp of the most recent successful upload, for the minimum-gap check."""
+    times: list[datetime] = []
+    for entry in state.get("posted", {}).values():
+        raw = entry.get("posted_at")
+        if not raw:
+            continue
+        try:
+            times.append(datetime.fromisoformat(raw))
+        except ValueError:
+            continue
+    return max(times) if times else None
+
+
 def _select_candidates(reels, state, start_date, mode) -> list[tuple[datetime, dict]]:
     candidates = []
     for reel in reels:
@@ -68,6 +82,23 @@ def run(mode: str, dry_run: bool) -> None:
 
     start_date = datetime.fromisoformat(cfg["start_date"]).replace(tzinfo=timezone.utc)
 
+    # Minimum spacing between uploads. Checked up front, before touching the
+    # Instagram API, so a skipped run costs nothing. It reads the whole posting
+    # history, so it applies across BOTH modes — a backlog run can't fire right
+    # after a new-reel run, and vice versa.
+    min_gap = timedelta(hours=float(cfg.get("min_gap_hours") or 0))
+    last_post = _last_posted_at(state)
+    if min_gap and last_post is not None:
+        elapsed = datetime.now(timezone.utc) - last_post
+        if elapsed < min_gap:
+            log.info(
+                "Last upload was %.2fh ago; minimum gap is %.1fh (%.2fh to go). Nothing to do.",
+                elapsed.total_seconds() / 3600,
+                min_gap.total_seconds() / 3600,
+                (min_gap - elapsed).total_seconds() / 3600,
+            )
+            return
+
     ig = instagram.InstagramClient(
         access_token=_require_env("IG_ACCESS_TOKEN"),
         user_id=os.environ.get("IG_USER_ID", "me"),
@@ -86,6 +117,11 @@ def run(mode: str, dry_run: bool) -> None:
         return
     if mode == "backlog":
         remaining = min(remaining, cfg["backlog"]["per_run"])
+    if min_gap:
+        # A second upload in the same run would land seconds after the first,
+        # so cap every run at one whenever a gap is enforced. (This is what
+        # previously let "new" mode post several reels in the same minute.)
+        remaining = min(remaining, 1)
     candidates = candidates[:remaining]
 
     if not candidates:

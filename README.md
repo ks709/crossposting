@@ -132,6 +132,10 @@ quick for personal use. Once approved, `privacy_status: public` in
 
 Everything lives in `config.yaml`:
 
+- `min_gap_hours` — minimum hours between **any** two uploads, across both the
+  `new` and `backlog` jobs (default `2`). A run that would break the spacing
+  logs why and exits without posting. While this is set, each run uploads at
+  most one video. Set to `0` to disable.
 - `backlog.per_run` and the cron times in `.github/workflows/backlog.yml`
   control the backlog pace (currently 3×/day × 1 = ~3/day).
 - `youtube.privacy_status` — set to `unlisted` or `private` if you'd rather
