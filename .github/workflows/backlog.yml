@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  issues: write # so a failed run can file an alert issue
 
 concurrency:
   group: crosspost-state
@@ -42,3 +43,44 @@ jobs:
           git add state/state.json
           git diff --cached --quiet || git commit -m "chore: update crosspost state [skip ci]"
           git push
+
+      # Failures used to be silent: an expired YouTube refresh token stopped
+      # every upload for two days before anyone noticed. File one issue per
+      # outage so the next one surfaces within the hour.
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create crosspost-failure --color B60205 \
+            --description "A crossposter run failed" --force || true
+          open_issue=$(gh issue list --label crosspost-failure --state open \
+            --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$open_issue" ]; then
+            echo "Issue #$open_issue is already open — not filing a duplicate."
+            exit 0
+          fi
+          cat > "$RUNNER_TEMP/failure.md" <<'EOF'
+          The **${{ github.workflow }}** workflow failed, so crossposting has stopped.
+
+          Run log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          The usual cause is the YouTube OAuth refresh token expiring or being revoked
+          (`invalid_grant: Token has been expired or revoked`). If the Google Cloud OAuth
+          app has slipped back to *Testing*, tokens die every 7 days.
+
+          To re-mint:
+          1. Google Auth Platform → Audience: confirm publishing status is **In production**.
+          2. `python scripts/get_youtube_token.py client_secret.json`
+          3. `gh secret set YT_REFRESH_TOKEN --repo ${{ github.repository }}`
+          4. `gh workflow run backlog.yml`
+
+          Missed slots are not backfilled, so every hour this stays broken is lost posts.
+
+          Close this issue once runs are green again — while it is open no further
+          issues are filed, so it doubles as the dedupe key.
+          EOF
+          gh issue create \
+            --title "Crossposter failing: ${{ github.workflow }}" \
+            --label crosspost-failure \
+            --body-file "$RUNNER_TEMP/failure.md"
