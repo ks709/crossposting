@@ -125,11 +125,12 @@ def run(mode: str, dry_run: bool) -> None:
 
     candidates, unpostable = _select_candidates(reels, state, start_date, mode)
     if unpostable:
+        # Count only: this fires on every run, and the ids are just noise until
+        # there is nothing left to post. They get listed in that case below.
         log.warning(
-            "Passing over %d %s reel(s) with no downloadable media_url: %s",
+            "Passing over %d %s reel(s) with no downloadable media_url.",
             len(unpostable),
             mode,
-            ", ".join(reel["id"] for reel in unpostable),
         )
 
     # Apply the daily safety cap and per-run limit.
@@ -149,8 +150,10 @@ def run(mode: str, dry_run: bool) -> None:
     if not candidates:
         if unpostable:
             log.warning(
-                "No postable %s reels: every remaining one is missing media_url.",
+                "No postable %s reels: all %d remaining are missing media_url (%s).",
                 mode,
+                len(unpostable),
+                ", ".join(reel["id"] for reel in unpostable),
             )
         else:
             log.info("No %s reels to post.", mode)
