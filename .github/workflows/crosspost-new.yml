@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "0 */2 * * *" # every 2 hours
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Preview only: list what would be posted, upload nothing"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -34,7 +39,7 @@ jobs:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
-        run: python -m src.main new
+        run: python -m src.main new ${{ inputs.dry_run && '--dry-run' || '' }}
 
       - name: Commit updated state
         run: |

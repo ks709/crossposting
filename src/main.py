@@ -60,8 +60,12 @@ def _last_posted_at(state: dict) -> datetime | None:
     return max(times) if times else None
 
 
-def _select_candidates(reels, state, start_date, mode) -> list[tuple[datetime, dict]]:
+def _select_candidates(
+    reels, state, start_date, mode
+) -> tuple[list[tuple[datetime, dict]], list[dict]]:
+    """Return (postable candidates oldest-first, reels with no downloadable file)."""
     candidates = []
+    unpostable = []
     for reel in reels:
         if state_mod.is_posted(state, reel["id"]):
             continue
@@ -70,10 +74,21 @@ def _select_candidates(reels, state, start_date, mode) -> list[tuple[datetime, d
             log.warning("Skipping reel %s: unparseable timestamp", reel.get("id"))
             continue
         is_new = ts >= start_date
-        if (mode == "new") == is_new:
-            candidates.append((ts, reel))
+        if (mode == "new") != is_new:
+            continue
+        # A reel Instagram won't give us a media_url for can never be uploaded —
+        # the API withholds it permanently for reels with licensed audio. Filter
+        # those out HERE rather than skipping them inside the upload loop below:
+        # selection is deterministic and capped at one reel per run, so a single
+        # un-downloadable reel at the head of the queue would otherwise be
+        # re-picked and re-skipped on every future run, stalling the queue behind
+        # it while each run still exited 0.
+        if not reel.get("media_url"):
+            unpostable.append(reel)
+            continue
+        candidates.append((ts, reel))
     candidates.sort(key=lambda pair: pair[0])  # oldest first
-    return candidates
+    return candidates, unpostable
 
 
 def run(mode: str, dry_run: bool) -> None:
@@ -108,7 +123,15 @@ def run(mode: str, dry_run: bool) -> None:
         exclude_ids=cfg["instagram"]["exclude_media_ids"],
     )
 
-    candidates = _select_candidates(reels, state, start_date, mode)
+    candidates, unpostable = _select_candidates(reels, state, start_date, mode)
+    if unpostable:
+        # Count only: this fires on every run, and the ids are just noise until
+        # there is nothing left to post. They get listed in that case below.
+        log.warning(
+            "Passing over %d %s reel(s) with no downloadable media_url.",
+            len(unpostable),
+            mode,
+        )
 
     # Apply the daily safety cap and per-run limit.
     remaining = cfg["backlog"]["max_uploads_per_day"] - state_mod.uploads_today(state)
@@ -125,9 +148,18 @@ def run(mode: str, dry_run: bool) -> None:
     candidates = candidates[:remaining]
 
     if not candidates:
-        log.info("No %s reels to post.", mode)
+        if unpostable:
+            log.warning(
+                "No postable %s reels: all %d remaining are missing media_url (%s).",
+                mode,
+                len(unpostable),
+                ", ".join(reel["id"] for reel in unpostable),
+            )
+        else:
+            log.info("No %s reels to post.", mode)
         return
 
+    uploaded = 0
     yt = None
     for ts, reel in candidates:
         title = captions.build_title(
@@ -138,10 +170,6 @@ def run(mode: str, dry_run: bool) -> None:
         )
         description = captions.build_description(reel.get("caption"))
         log.info("[%s] reel %s (%s) -> %r", mode, reel["id"], reel.get("timestamp"), title)
-
-        if not reel.get("media_url"):
-            log.warning("Skipping reel %s: no downloadable media_url", reel["id"])
-            continue
 
         if dry_run:
             continue
@@ -168,7 +196,17 @@ def run(mode: str, dry_run: bool) -> None:
 
         state_mod.mark_posted(state, reel["id"], video_id, mode)
         state_mod.save_state(STATE_PATH, state)  # persist after each success
+        uploaded += 1
         log.info("Uploaded https://youtu.be/%s", video_id)
+
+    # Selecting reels and then uploading none means something skipped silently.
+    # Exit non-zero so the workflow's failure step files an alert issue instead
+    # of the run going green with nothing posted.
+    if not dry_run and uploaded == 0:
+        sys.exit(
+            f"Selected {len(candidates)} {mode} reel(s) but uploaded none; "
+            "treating as a failed run."
+        )
 
 
 def main() -> None:
