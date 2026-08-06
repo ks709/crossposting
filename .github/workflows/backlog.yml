@@ -5,6 +5,11 @@ on:
     # Three times a day (UTC) -> ~3 old reels/day with per_run = 1.
     - cron: "0 9,15,21 * * *"
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Preview only: list what would be posted, upload nothing"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -34,7 +39,7 @@ jobs:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
-        run: python -m src.main backlog
+        run: python -m src.main backlog ${{ inputs.dry_run && '--dry-run' || '' }}
 
       - name: Commit updated state
         run: |
