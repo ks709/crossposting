@@ -22,6 +22,15 @@ log = logging.getLogger("crosspost")
 
 STATE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "state", "state.json")
 
+# How many times a reel's download may fail before it is given up on. Reels
+# without a media_url are fetched by scraping their public page, which fails
+# for transient reasons often enough to be worth retrying, but not forever.
+MAX_DOWNLOAD_ATTEMPTS = 3
+
+# Spare candidates to pull into a run beyond the upload budget, so a reel
+# that fails to download costs an attempt rather than the run's posting slot.
+EXTRA_DOWNLOAD_ATTEMPTS = 2
+
 try:  # optional convenience for local runs
     from dotenv import load_dotenv
 
@@ -76,14 +85,21 @@ def _select_candidates(
         is_new = ts >= start_date
         if (mode == "new") != is_new:
             continue
-        # A reel Instagram won't give us a media_url for can never be uploaded —
-        # the API withholds it permanently for reels with licensed audio. Filter
-        # those out HERE rather than skipping them inside the upload loop below:
-        # selection is deterministic and capped at one reel per run, so a single
-        # un-downloadable reel at the head of the queue would otherwise be
-        # re-picked and re-skipped on every future run, stalling the queue behind
-        # it while each run still exited 0.
-        if not reel.get("media_url"):
+        # Instagram withholds media_url for some reels (those using licensed
+        # audio are the common case). Those are still fetchable from their
+        # public permalink, so they stay in the queue; what gets dropped is
+        # reels with no source at all, and reels whose downloads have failed
+        # MAX_DOWNLOAD_ATTEMPTS times.
+        #
+        # Dropping them HERE rather than skipping inside the upload loop below
+        # is what keeps the queue moving: selection is deterministic and capped
+        # at one reel per run, so a reel that can never be fetched would
+        # otherwise be re-picked and re-skipped on every future run, stalling
+        # everything behind it while each run still exited 0.
+        if not reel.get("media_url") and not reel.get("permalink"):
+            unpostable.append(reel)
+            continue
+        if state_mod.download_attempts(state, reel["id"]) >= MAX_DOWNLOAD_ATTEMPTS:
             unpostable.append(reel)
             continue
         candidates.append((ts, reel))
@@ -128,7 +144,7 @@ def run(mode: str, dry_run: bool) -> None:
         # Count only: this fires on every run, and the ids are just noise until
         # there is nothing left to post. They get listed in that case below.
         log.warning(
-            "Passing over %d %s reel(s) with no downloadable media_url.",
+            "Passing over %d %s reel(s) with no downloadable video.",
             len(unpostable),
             mode,
         )
@@ -145,14 +161,22 @@ def run(mode: str, dry_run: bool) -> None:
         # so cap every run at one whenever a gap is enforced. (This is what
         # previously let "new" mode post several reels in the same minute.)
         remaining = min(remaining, 1)
+    # Downloads can fail — the permalink fallback is scraping, and scraping
+    # breaks — so pull in a couple of spares past the upload budget and stop as
+    # soon as the budget is met. Dry runs list exactly what would be posted.
+    upload_budget = remaining
+    if not dry_run:
+        remaining += EXTRA_DOWNLOAD_ATTEMPTS
     candidates = candidates[:remaining]
 
     if not candidates:
         if unpostable:
             log.warning(
-                "No postable %s reels: all %d remaining are missing media_url (%s).",
+                "No postable %s reels: all %d remaining have no downloadable "
+                "video, or have failed %d download attempts (%s).",
                 mode,
                 len(unpostable),
+                MAX_DOWNLOAD_ATTEMPTS,
                 ", ".join(reel["id"] for reel in unpostable),
             )
         else:
@@ -169,14 +193,36 @@ def run(mode: str, dry_run: bool) -> None:
             cfg["title"]["empty_fallback"],
         )
         description = captions.build_description(reel.get("caption"))
-        log.info("[%s] reel %s (%s) -> %r", mode, reel["id"], reel.get("timestamp"), title)
+        source = "media_url" if reel.get("media_url") else "permalink"
+        log.info(
+            "[%s] reel %s (%s, via %s) -> %r",
+            mode,
+            reel["id"],
+            reel.get("timestamp"),
+            source,
+            title,
+        )
 
         if dry_run:
             continue
 
         with tempfile.TemporaryDirectory() as tmp:
             video_path = os.path.join(tmp, f"{reel['id']}.mp4")
-            ig.download_media(reel["media_url"], video_path)
+            try:
+                ig.download(reel, video_path)
+            except Exception as exc:
+                # Don't let one un-fetchable reel take the whole run down: bank
+                # the failure so it is eventually skipped, and try the next one.
+                attempts = state_mod.record_download_failure(state, reel["id"], str(exc))
+                state_mod.save_state(STATE_PATH, state)
+                log.warning(
+                    "Download failed for reel %s (attempt %d of %d): %s",
+                    reel["id"],
+                    attempts,
+                    MAX_DOWNLOAD_ATTEMPTS,
+                    exc,
+                )
+                continue
 
             if yt is None:
                 yt = youtube.build_youtube(
@@ -194,10 +240,13 @@ def run(mode: str, dry_run: bool) -> None:
                 made_for_kids=cfg["youtube"]["made_for_kids"],
             )
 
+        state_mod.clear_download_failure(state, reel["id"])
         state_mod.mark_posted(state, reel["id"], video_id, mode)
         state_mod.save_state(STATE_PATH, state)  # persist after each success
         uploaded += 1
         log.info("Uploaded https://youtu.be/%s", video_id)
+        if uploaded >= upload_budget:
+            break
 
     # Selecting reels and then uploading none means something skipped silently.
     # Exit non-zero so the workflow's failure step files an alert issue instead

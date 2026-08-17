@@ -6,6 +6,7 @@ long-lived access token.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Iterator, Sequence
 
 import requests
@@ -81,6 +82,68 @@ class InstagramClient:
                     if chunk:
                         fh.write(chunk)
         return dest_path
+
+    def download(self, reel: dict, dest_path: str) -> str:
+        """Fetch a reel's video, whichever way works.
+
+        The API's media_url is the supported path and stays the default. For
+        the reels it withholds a media_url for, fall back to the public page.
+        """
+        media_url = reel.get("media_url")
+        if media_url:
+            return self.download_media(media_url, dest_path)
+
+        permalink = reel.get("permalink")
+        if not permalink:
+            raise InstagramError(
+                f"Reel {reel.get('id')} has neither media_url nor permalink"
+            )
+        log.info(
+            "Reel %s has no media_url; falling back to its permalink", reel.get("id")
+        )
+        return download_via_permalink(permalink, dest_path)
+
+
+def download_via_permalink(permalink: str, dest_path: str) -> str:
+    """Download a reel from its public page instead of the API.
+
+    Instagram withholds media_url for some reels (reels using licensed audio
+    are the common case), which leaves the API with no way to hand over the
+    file. Scraping the public page via yt-dlp does get it, at the cost of
+    depending on yt-dlp's Instagram extractor: it breaks whenever Instagram
+    reshapes the page, and it only sees reels that are publicly visible.
+    Failures here are expected and handled by the caller, not fatal.
+    """
+    try:
+        import yt_dlp
+    except ImportError as exc:  # pragma: no cover - dependency is in requirements
+        raise InstagramError(
+            "yt-dlp is needed to download reels the API withholds a media_url for"
+        ) from exc
+
+    # yt-dlp chooses the container, so hand it a template with no extension and
+    # move whatever it produced into place afterwards.
+    base = os.path.splitext(dest_path)[0]
+    opts = {
+        "outtmpl": base + ".%(ext)s",
+        # Prefer a single progressive mp4 so there is nothing to remux.
+        "format": "best[ext=mp4]/best",
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+    }
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        try:
+            info = ydl.extract_info(permalink, download=True)
+        except Exception as exc:  # yt-dlp raises a wide range of its own errors
+            raise InstagramError(f"Permalink download failed for {permalink}: {exc}") from exc
+        produced = ydl.prepare_filename(info)
+
+    if not os.path.exists(produced):
+        raise InstagramError(f"Permalink download produced no file for {permalink}")
+    if produced != dest_path:
+        os.replace(produced, dest_path)
+    return dest_path
 
 
 def refresh_long_lived_token(

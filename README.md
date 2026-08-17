@@ -18,12 +18,13 @@ free on GitHub Actions — no PC needs to stay on.
 
 | Piece | What it does |
 | --- | --- |
-| `src/instagram.py` | Lists your reels and downloads their video files via the Instagram API. |
+| `src/instagram.py` | Lists your reels and downloads their video files via the Instagram API, falling back to the public page for reels the API withholds. |
 | `src/youtube.py` | Uploads a video to YouTube using a saved OAuth refresh token. |
 | `src/captions.py` | Turns the IG caption into a YouTube title + description. |
 | `src/state.py` + `state/state.json` | Remembers which reels are already posted, so nothing is duplicated. |
 | `src/main.py` | `new` and `backlog` modes; `--dry-run` to preview. |
 | `.github/workflows/` | Cron schedules that run it all in the cloud. |
+| `scripts/check_permalink_download.py` | Checks that the permalink fallback can still fetch the reels the API withholds. |
 
 The daily cap (`max_uploads_per_day: 6` in `config.yaml`) exists because
 YouTube's API allows roughly **6 uploads per day** on the default quota.
@@ -148,7 +149,18 @@ Everything lives in `config.yaml`:
 - **YouTube quota** caps uploads at ~6/day. The `new` and `backlog` jobs share
   a running daily counter and stop at `max_uploads_per_day`.
 - **Copyrighted audio** in a reel may be muted or blocked by YouTube's Content
-  ID once on YouTube — nothing this tool can change.
+  ID once on YouTube — nothing this tool can change. In practice a Content ID
+  match usually just routes that video's ad revenue to the rights holder; it is
+  not a strike against the channel.
+- **Reels with licensed audio get no `media_url`** from the Instagram API, so
+  there is no file to fetch through the supported path. Those fall back to
+  downloading the reel's public page with `yt-dlp`. That is scraping rather
+  than the API: it only sees publicly visible reels, and it breaks whenever
+  Instagram reshapes the page. A reel whose download fails is retried on the
+  next three runs and then dropped from the queue, so a broken fallback can
+  never stall the reels behind it. Run
+  `python scripts/check_permalink_download.py` to see whether it currently
+  works.
 - **Reels over 3 minutes** upload as normal videos, not Shorts.
 - The Instagram token auto-refreshes weekly; if that job ever fails, GitHub
   emails you and you can re-run it from the Actions tab.
